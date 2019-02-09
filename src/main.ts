@@ -6,11 +6,14 @@ import OpenGLRenderer from './rendering/gl/OpenGLRenderer';
 import Camera from './Camera';
 import {setGL} from './globals';
 import ShaderProgram, {Shader} from './rendering/gl/ShaderProgram';
+import { getUnpackedSettings } from 'http2';
 
 // Define an object with application parameters and button callbacks
 // This will be referred to by dat.GUI's functions that add GUI elements.
 const controls = {
   tesselations: 5,
+  colorShift: 0,
+  sizeShift: 0,
   'Load Scene': loadScene, // A function pointer, essentially
 };
 
@@ -47,6 +50,10 @@ function main() {
 
   // Add controls to the gui
   const gui = new DAT.GUI();
+
+  gui.add(controls, 'colorShift', 0, 1).step(0.1);
+  gui.add(controls, 'sizeShift', 0, 1).step(0.1);
+
 
   // get canvas and webgl context
   const canvas = <HTMLCanvasElement> document.getElementById('canvas');
@@ -85,7 +92,7 @@ function main() {
     processKeyPresses();
     renderer.render(camera, flat, [
       square,
-    ], time);
+    ], time, controls.colorShift, controls.sizeShift);
     time++;
     stats.end();
 
