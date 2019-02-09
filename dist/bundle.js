@@ -5917,6 +5917,8 @@ Object.defineProperty(__webpack_exports__, "__esModule", { value: true });
 // This will be referred to by dat.GUI's functions that add GUI elements.
 const controls = {
     tesselations: 5,
+    colorShift: 0,
+    sizeShift: 0,
     'Load Scene': loadScene,
 };
 let square;
@@ -5947,6 +5949,8 @@ function main() {
     document.body.appendChild(stats.domElement);
     // Add controls to the gui
     const gui = new __WEBPACK_IMPORTED_MODULE_2_dat_gui__["GUI"]();
+    gui.add(controls, 'colorShift', 0, 1).step(0.1);
+    gui.add(controls, 'sizeShift', 0, 1).step(0.1);
     // get canvas and webgl context
     const canvas = document.getElementById('canvas');
     const gl = canvas.getContext('webgl2');
@@ -5978,7 +5982,7 @@ function main() {
         processKeyPresses();
         renderer.render(camera, flat, [
             square,
-        ], time);
+        ], time, controls.colorShift, controls.sizeShift);
         time++;
         stats.end();
         // Tell the browser to call `tick` again whenever it renders a new frame
@@ -13097,9 +13101,11 @@ class OpenGLRenderer {
     clear() {
         __WEBPACK_IMPORTED_MODULE_0__globals__["a" /* gl */].clear(__WEBPACK_IMPORTED_MODULE_0__globals__["a" /* gl */].COLOR_BUFFER_BIT | __WEBPACK_IMPORTED_MODULE_0__globals__["a" /* gl */].DEPTH_BUFFER_BIT);
     }
-    render(camera, prog, drawables, time) {
+    render(camera, prog, drawables, time, color, size) {
         prog.setEyeRefUp(camera.controls.eye, camera.controls.center, camera.controls.up);
         prog.setTime(time);
+        prog.setColorShift(color);
+        prog.setSizeShift(size);
         for (let drawable of drawables) {
             prog.draw(drawable);
         }
@@ -16253,6 +16259,8 @@ class ShaderProgram {
         this.unifUp = __WEBPACK_IMPORTED_MODULE_0__globals__["a" /* gl */].getUniformLocation(this.prog, "u_Up");
         this.unifDimensions = __WEBPACK_IMPORTED_MODULE_0__globals__["a" /* gl */].getUniformLocation(this.prog, "u_Dimensions");
         this.unifTime = __WEBPACK_IMPORTED_MODULE_0__globals__["a" /* gl */].getUniformLocation(this.prog, "u_Time");
+        this.unifColor = __WEBPACK_IMPORTED_MODULE_0__globals__["a" /* gl */].getUniformLocation(this.prog, "u_Color");
+        this.unifSize = __WEBPACK_IMPORTED_MODULE_0__globals__["a" /* gl */].getUniformLocation(this.prog, "u_Size");
     }
     use() {
         if (activeProgram !== this.prog) {
@@ -16284,6 +16292,18 @@ class ShaderProgram {
             __WEBPACK_IMPORTED_MODULE_0__globals__["a" /* gl */].uniform1f(this.unifTime, t);
         }
     }
+    setColorShift(t) {
+        this.use();
+        if (this.unifColor !== -1) {
+            __WEBPACK_IMPORTED_MODULE_0__globals__["a" /* gl */].uniform1f(this.unifColor, t);
+        }
+    }
+    setSizeShift(t) {
+        this.use();
+        if (this.unifSize !== -1) {
+            __WEBPACK_IMPORTED_MODULE_0__globals__["a" /* gl */].uniform1f(this.unifSize, t);
+        }
+    }
     draw(d) {
         this.use();
         if (this.attrPos != -1 && d.bindPos()) {
@@ -16310,7 +16330,7 @@ module.exports = "#version 300 es\nprecision highp float;\n\n// The vertex shade
 /* 69 */
 /***/ (function(module, exports) {
 
-module.exports = "#version 300 es\nprecision highp float;\n\nuniform vec3 u_Eye, u_Ref, u_Up;\nuniform vec2 u_Dimensions;\nuniform float u_Time;\n\nin vec2 fs_Pos;\nout vec4 out_Col;\n\nvoid main() {\n  out_Col = vec4(0.5 * (fs_Pos + vec2(1.0)), 0.5 * (sin(u_Time * 3.14159 * 0.01) + 1.0), 1.0);\n}\n"
+module.exports = "#version 300 es\nprecision highp float;\n\nuniform vec3 u_Eye, u_Ref, u_Up;\nuniform vec2 u_Dimensions;\nuniform float u_Time;\nuniform float u_Color;\nuniform float u_Size;\n\n#define MAX_MARCHING_STEPS 100.f\n#define MAX_DIST 500.f\n#define MIN_DIST 0.f\n#define EPSILON 0.01f\n#define STEP_SIZE 0.001f\n\nin vec2 fs_Pos;\nout vec4 out_Col;\n\nfloat dot2( vec2 v ) { return dot(v,v); }\n\nmat4 rotateY(float theta) {\n    float c = cos(theta);\n    float s = sin(theta);\n\n    return mat4(\n        vec4(c, 0, s, 0),\n        vec4(0, 1, 0, 0),\n        vec4(-s, 0, c, 0),\n        vec4(0, 0, 0, 1)\n    );\n}\n\nfloat boxSDF(vec3 samplePoint, vec3 b)\n{\n  vec3 d = abs(samplePoint) - b;\n  return length(max(d,0.0))\n         + min(max(d.x,max(d.y,d.z)),0.0);\n}\n\nfloat sphereSDF(vec3 posAlongRay, vec3 offset, float rad) {\n  return float(length(posAlongRay + offset)) - rad;\n}\n\nfloat intersectSDF(float distA, float distB) {\n  return max(distA, distB);\n}\n\nfloat subtractSDF(float distA, float distB) {\n  return max(-distA, distB);\n}\n\nfloat smooth_min(float a, float b, float k) {\n    float h = clamp(0.5 + 0.5*(b-a)/k, 0.0, 1.0);\n    return mix(b, a, h) - k * h * (1.0 - h);\n}\n\nvec2 sceneMap(vec3 samplePoint) {\n    bool tower_spheres = false;\n    bool towers = false;\n    bool spheres = false;\n\n    float maxMainBound = 11.f;\n    float minMainBound = -11.f;\n\n    float maxYSphere = 12.f + u_Size;\n    float maxXSphere = 12.f;\n\n    float maxBoundBox = 6.f;\n    float minBoundBox = -6.f;\n\n    if (samplePoint.x < maxMainBound && samplePoint.x > minMainBound &&\n        samplePoint.y < maxMainBound && samplePoint.y > minMainBound &&\n        samplePoint.z < maxMainBound && samplePoint.z > minMainBound) {\n          tower_spheres = true;\n    }\n\n    if (tower_spheres) {\n      float tower = 0.f;\n      float sphereDist = 0.f;\n      if (samplePoint.x < maxBoundBox && samplePoint.x > minBoundBox &&\n        samplePoint.y < maxBoundBox && samplePoint.y > minBoundBox &&\n        samplePoint.z < maxBoundBox && samplePoint.z > minBoundBox) {\n          towers = true;\n              //old tower\n          vec3 rotated = (inverse(rotateY(u_Time * 0.04)) * vec4(samplePoint, 1.0)).xyz;\n\n          float body = boxSDF(rotated, vec3(3.0, 3.0, 3.0));\n          float opening = sphereSDF(rotated, vec3(0.0), 4.2f);\n          float innards = boxSDF(rotated, vec3(1.8,6.0, 1.8));\n          float innards2 = boxSDF(rotated, vec3(6.0,1.8, 1.8));\n          float innards3 = boxSDF(rotated, vec3(1.8,1.8, 6.0));\n          tower = subtractSDF(innards3, subtractSDF(innards2, subtractSDF(innards, intersectSDF(body, opening))));\n      }\n\n      if (samplePoint.x < maxXSphere && samplePoint.x > -maxXSphere &&\n        samplePoint.y < maxYSphere && samplePoint.y > -maxYSphere &&\n        samplePoint.z < maxXSphere && samplePoint.z > -maxXSphere) {\n          spheres = true;\n          vec3 rotated = (inverse(rotateY(u_Time * 0.04)) * vec4(samplePoint, 1.0)).xyz;\n          //sphere\n        float offset = 6.f*sin(2.f*3.14159 * 0.009 * u_Time);\n        float offset2 = 6.f*cos(2.f*3.14159 * 0.009 * u_Time);\n        vec3 translated = vec3(samplePoint.x + offset, samplePoint.y, samplePoint.z + 0.6*offset);\n        vec3 translated2 = vec3(samplePoint.x + offset2, samplePoint.y, samplePoint.z - 0.6*offset2);\n        rotated = (inverse(rotateY(u_Time * 0.08)) * vec4(samplePoint + vec3(0.5, 0.0,0.0), 1.0)).xyz;\n\n        float sphere2 = sphereSDF(translated2, vec3(0,0,0), 0.5f);\n        float sphere = sphereSDF(translated, vec3(0,0,0), 0.5f);\n        float mommaSphere = sphereSDF(rotated + vec3(0.5, 0.0,0.0), vec3(0.0), 1.f + u_Size);\n        sphereDist = smooth_min(smooth_min(sphere, sphere2, 0.4), mommaSphere, 1.0);\n        }\n\n        if (spheres && towers) {\n            if (tower <= sphereDist) {\n              return vec2(tower, 1.f);\n            } else {\n              return vec2(sphereDist, 2.f);\n           }\n        } else if (towers) {\n          return vec2(tower, 1.f);\n        } else if (spheres) {\n          return vec2(sphereDist, 2.f);\n        }\n    }\n    \n    return vec2(100.f, 0.f);\n}\n\nvec2 rayMarch(vec3 origin, vec3 dir) {\n  float depth = MIN_DIST;\n  for (int i = 0; i < int(MAX_MARCHING_STEPS); i++) {\n    vec2 dist = sceneMap(origin + depth * dir);\n    if (dist.x < EPSILON) {\n        // We're inside the scene surface!\n        return vec2(depth, dist.y);\n    }\n    // Move along the view ray\n    depth += dist.x;\n\n    if (depth >= MAX_DIST) {\n        // Gone too far; give up\n        return vec2(MAX_DIST, 0.f);\n    }\n  }\n  return vec2(MAX_DIST, 0.f);\n}\n\nvec3 estimateNormal(vec3 p) {\n    return normalize(vec3(\n        sceneMap(vec3(p.x + EPSILON, p.y, p.z)).x - sceneMap(vec3(p.x - EPSILON, p.y, p.z)).x,\n        sceneMap(vec3(p.x, p.y + EPSILON, p.z)).x - sceneMap(vec3(p.x, p.y - EPSILON, p.z)).x,\n        sceneMap(vec3(p.x, p.y, p.z  + EPSILON)).x - sceneMap(vec3(p.x, p.y, p.z - EPSILON)).x\n    ));\n}\n\nfloat rand(vec2 co){\n    return fract(sin(dot(co.xy ,vec2(12.9898,78.233))) * 43758.5453);\n}\n\nfloat interpNoise2D(float x, float y) {\n  float intX = floor(x);\n  float fractX = fract(x);\n  float intY = floor(y);\n  float fractY = fract(y);\n\n  float v1 = rand(vec2(intX, intY));\n  float v2 = rand(vec2(intX + 1.f, intY));\n  float v3 = rand(vec2(intX, intY + 1.f));\n  float v4 = rand(vec2(intX + 1.f, intY + 1.f));\n\n  float i1 = mix(v1, v2, fractX);\n  float i2 = mix(v3, v4, fractX);\n\n  return mix(i1, i2, fractY);\n}\n\nfloat fbm(float x, float y) {\n  float roughness = 1.f;\n  float total = 0.f;\n  float persistence = 0.5f;\n  int octaves = 8;\n\n  for (int i = 0; i < octaves; i++) {\n    float freq = pow(2.f, float(i));\n    float amp = pow(persistence, float(i));\n\n    total += interpNoise2D(x * freq, y * freq) * amp * roughness;\n    roughness *= interpNoise2D(x*freq, y*freq);\n  }\n  return total;\n}\n\nfloat parabola(float x, float k) {\n\treturn pow(4.f*x*(1.f - x), k);\n}\n\nvoid main() {\n\n  //let's cast a ray using the info we have!\n  //any point on frustrum Pf = ref + aH + bV where\n  //ref = u_Ref, a = 2*(Px/u_Dimensions.x - 0.5), b = 2*(Py/u_Dimensions.y - 0.5), and\n  //H = aspect_ratio*tan(FOV/2) * right_vector (aspect = width / height)\n  //V = tan(FOV/2) * up_vector\n\n  vec3 forward = normalize(u_Ref - u_Eye);\n  vec3 right = normalize(cross(forward, u_Up));\n  vec3 up = normalize(cross(right, forward));\n\n  vec3 h = right * length(u_Ref - u_Eye) * (float(u_Dimensions.x) / u_Dimensions.y) * tan(radians(45.0));\n  vec3 v = up * length(u_Ref - u_Eye) * tan(radians(45.0));\n\n  vec3 Pf = u_Ref + fs_Pos.x * h + fs_Pos.y * v;\n  vec3 dir = normalize(Pf - u_Eye);\n\n  //ray march along dir\n  vec2 res = rayMarch(u_Eye, dir);\n\nif (res.x > 99.f) {\n  vec3 p = u_Eye + res.x*dir;\n  float noise = smoothstep(0.0,0.5,fbm(p.x, p.y)) + smoothstep(0.0,0.5,fbm(p.y, p.x));\n  out_Col = vec4(vec3(1.0) - ((vec3(0.5) * 20.f * noise) * vec3(0.8, 0.3, 0.9)), 1.0); //234 227 244\n} else if (res.y == 1.f) {\n  vec3 p = u_Eye + res.x*dir;\n  vec3 n = estimateNormal(p); //86 244, 66\n\n  vec3 lightVector = vec3(-5.0,-2.0,0.0);\n\n  float diffuseTerm = dot(normalize(n), normalize(lightVector));\n  diffuseTerm = clamp(diffuseTerm, 0.f, 1.f);\n  float ambientTerm = 0.2;\n\n  float lightIntensity = diffuseTerm + ambientTerm;\n\n\n  vec4 H = (vec4(lightVector, 1.0) + (vec4(u_Eye,1.f) - vec4(p,1.0))) / 2.0;\n    float blinnTerm = max(pow(dot(normalize(H), normalize(vec4(lightVector, 1.0))), 100.f), 0.f);\n    blinnTerm = clamp(blinnTerm,0.f,1.f);\n\n    // Compute final shaded color\n    out_Col = vec4(vec3((17.f + 255.f*u_Color) / 255.f, 73.f / 255.f, (9.f + 255.f*u_Color) / 255.f) * lightIntensity + blinnTerm, 1.0); //58,35,89\n\n} else if (res.y == 2.f) {\n    vec3 p = u_Eye + res.x*dir;\n  vec3 n = estimateNormal(p);\n\n  vec3 lightVector = vec3(-5.0,-2.0,0.0);\n\n  float diffuseTerm = dot(normalize(n), normalize(lightVector));\n  diffuseTerm = clamp(diffuseTerm, 0.f, 1.f);\n  float ambientTerm = 0.2;\n\n  float lightIntensity = diffuseTerm + ambientTerm;\n\n\n  vec4 H = (vec4(lightVector, 1.0) + (vec4(u_Eye,1.f) - vec4(p,1.0))) / 2.0;\n    float blinnTerm = max(pow(dot(normalize(H), normalize(vec4(lightVector, 1.0))), 100.f), 0.f);\n    blinnTerm = clamp(blinnTerm,0.f,1.f);\n\n  float noise = parabola(fbm(p.x, p.y), 6.f);\n    out_Col = vec4(vec3(3.f*noise + u_Color,5.f*noise,0.0 + u_Color) * lightIntensity + blinnTerm,1);\n}\n  \n}\n\n\n\n"
 
 /***/ })
 /******/ ]);
