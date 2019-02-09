@@ -18,18 +18,6 @@ out vec4 out_Col;
 
 float dot2( vec2 v ) { return dot(v,v); }
 
-mat4 rotateX(float theta) {
-    float c = cos(theta);
-    float s = sin(theta);
-
-    return mat4(
-        vec4(1, 0, 0, 0),
-        vec4(0, c, -s, 0),
-        vec4(0, s, c, 0),
-        vec4(0, 0, 0, 1)
-    );
-}
-
 mat4 rotateY(float theta) {
     float c = cos(theta);
     float s = sin(theta);
@@ -42,18 +30,6 @@ mat4 rotateY(float theta) {
     );
 }
 
-mat4 rotateZ(float theta) {
-    float c = cos(theta);
-    float s = sin(theta);
-
-    return mat4(
-        vec4(c, -s, 0, 0),
-        vec4(s, c, 0, 0),
-        vec4(0, 0, 1, 0),
-        vec4(0, 0, 0, 1)
-    );
-}
-
 float boxSDF(vec3 samplePoint, vec3 b)
 {
   vec3 d = abs(samplePoint) - b;
@@ -61,33 +37,8 @@ float boxSDF(vec3 samplePoint, vec3 b)
          + min(max(d.x,max(d.y,d.z)),0.0);
 }
 
-float planeSDF(vec3 samplePoint, vec4 n) {
-  return dot(vec3(samplePoint.x, samplePoint.y + 5.f, samplePoint.z), n.xyz) + n.w;
-}
-
 float sphereSDF(vec3 posAlongRay, vec3 offset, float rad) {
   return float(length(posAlongRay + offset)) - rad;
-}
-
-float coneSDF( vec3 p, vec2 c )
-{
-    // c must be normalized
-    float q = length(p.xy);
-    return dot(c,vec2(q,p.z));
-}
-
-float roundConeSDF( vec3 p, float r1, float r2, float h )
-{
-    vec2 q = vec2( length(p.xz), p.y );
-    
-    float b = (r1-r2)/h;
-    float a = sqrt(1.0-b*b);
-    float k = dot(q,vec2(-b,a));
-    
-    if( k < 0.0 ) return length(q) - r1;
-    if( k > a*h ) return length(q-vec2(0.0,h)) - r2;
-        
-    return dot(q, vec2(a,b)) - r1;
 }
 
 float intersectSDF(float distA, float distB) {
@@ -98,39 +49,9 @@ float subtractSDF(float distA, float distB) {
   return max(-distA, distB);
 }
 
-float unionSDF(float distA, float distB) {
-  return min(distA, distB);
-}
-
-float cylinderSDF(vec3 p, vec2 h)
-{
-  vec2 d = abs(vec2(length(p.xz),p.y)) - h;
-  return min(max(d.x,d.y),0.0) + length(max(d,0.0));
-}
-
-float cappedConeSDF( vec3 p, float h, float r1, float r2 )
-{
-    vec2 q = vec2( length(p.xz), p.y );
-    
-    vec2 k1 = vec2(r2,h);
-    vec2 k2 = vec2(r2-r1,2.0*h);
-    vec2 ca = vec2(q.x-min(q.x,(q.y < 0.0)?r1:r2), abs(q.y)-h);
-    vec2 cb = q - k1 + k2*clamp( dot(k1-q,k2)/dot2(k2), 0.0, 1.0 );
-    float s = (cb.x < 0.0 && ca.y < 0.0) ? -1.0 : 1.0;
-    return s*sqrt( min(dot2(ca),dot2(cb)) );
-}
-
 float smooth_min(float a, float b, float k) {
     float h = clamp(0.5 + 0.5*(b-a)/k, 0.0, 1.0);
     return mix(b, a, h) - k * h * (1.0 - h);
-}
-
-//old sceneMap
-
-float prismSDF(vec3 p, vec2 h)
-{
-    vec3 q = abs(p);
-    return max(q.z-h.y,max(q.x*0.866025+p.y*0.5,-p.y)-h.x*0.5);
 }
 
 vec2 sceneMap(vec3 samplePoint) {
